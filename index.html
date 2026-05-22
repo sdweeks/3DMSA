@@ -419,39 +419,65 @@ function finalizeMsa(names, seqs) {
 
 /* =================================================================
    Matching the PDB chain to the closest MSA row
+   =================================================================
+   Semi-global (a.k.a. "glocal" / free-end-gap) Needleman-Wunsch:
+   the PDB sequence can align as a domain inside a longer MSA
+   sequence without paying gap penalties for the unaligned flanks.
+   This is essential when the MSA contains full-length ORFs and
+   the PDB is just a domain (e.g. protease + scaffold ORFs vs
+   protease-only PDB). Identity is normalized by min(len), so a
+   short sequence perfectly embedded in a long one scores ~1.0.
    ================================================================= */
 function ungap(s) { return s.replace(/-/g, ""); }
 
-function percentIdentityUngapped(a, b) {
-  // simple sliding ungapped match length-normalized; fallback to alignment when lengths differ
-  if (a.length === b.length) {
-    let match = 0;
-    for (let i = 0; i < a.length; i++) if (a[i] === b[i]) match++;
-    return match / a.length;
-  }
-  // Use lightweight Needleman-Wunsch identity
-  return nwIdentity(a, b);
-}
-
-function nwIdentity(a, b) {
-  // Lightweight NW with match=1, mismatch=0, gap=-1; returns identity = matches / max(len)
+function semiGlobalAlign(a, b) {
   const n = a.length, m = b.length;
-  if (n === 0 || m === 0) return 0;
-  const GAP = -1;
-  // Use two rolling rows
-  let prev = new Int32Array(m + 1);
-  let cur = new Int32Array(m + 1);
-  for (let j = 0; j <= m; j++) prev[j] = GAP * j;
+  if (n === 0 || m === 0) return { a: "", b: "", aStart: 0, bStart: 0, score: 0, identity: 0 };
+  const MATCH = 2, MISM = -1, GAP = -2;
+  const W = m + 1;
+  const score = new Int32Array((n+1) * W);
+  const back  = new Uint8Array((n+1) * W);   // 0 diag, 1 up, 2 left
+  // First row/column = 0 (free leading gaps); back pointers walk along edges
+  for (let i = 1; i <= n; i++) back[i*W] = 1;
+  for (let j = 1; j <= m; j++) back[j] = 2;
+
   for (let i = 1; i <= n; i++) {
-    cur[0] = GAP * i;
+    const iW = i * W, im1W = (i - 1) * W;
+    const ai = a.charCodeAt(i - 1);
     for (let j = 1; j <= m; j++) {
-      const match = (a[i-1] === b[j-1]) ? 1 : 0;
-      cur[j] = Math.max(prev[j-1] + match, prev[j] + GAP, cur[j-1] + GAP);
+      const d = score[im1W + (j-1)] + (ai === b.charCodeAt(j-1) ? MATCH : MISM);
+      const u = score[im1W + j]     + GAP;
+      const l = score[iW + (j-1)]   + GAP;
+      let s = d, bk = 0;
+      if (u > s) { s = u; bk = 1; }
+      if (l > s) { s = l; bk = 2; }
+      score[iW + j] = s;
+      back[iW + j]  = bk;
     }
-    const tmp = prev; prev = cur; cur = tmp;
   }
-  // matches ~ score (since mismatch=0, gaps negative). Use prev[m] / max(n,m)
-  return Math.max(0, prev[m]) / Math.max(n, m);
+
+  // Best end: max over last row or last column (free trailing gaps)
+  let best = -Infinity, bi = n, bj = m;
+  for (let j = 0; j <= m; j++) {
+    const v = score[n*W + j];
+    if (v > best) { best = v; bi = n; bj = j; }
+  }
+  for (let i = 0; i <= n; i++) {
+    const v = score[i*W + m];
+    if (v > best) { best = v; bi = i; bj = m; }
+  }
+
+  // Traceback the aligned region only (anything outside is unaligned flank)
+  let A2 = "", B2 = "";
+  let i = bi, j = bj;
+  while (i > 0 && j > 0) {
+    const bk = back[i*W + j];
+    if (bk === 0)      { A2 = a[i-1] + A2; B2 = b[j-1] + B2; i--; j--; }
+    else if (bk === 1) { A2 = a[i-1] + A2; B2 = "-"     + B2; i--; }
+    else                { A2 = "-"   + A2; B2 = b[j-1] + B2; j--; }
+  }
+  const identity = Math.max(0, best) / (MATCH * Math.min(n, m));
+  return { a: A2, b: B2, aStart: i, bStart: j, score: best, identity };
 }
 
 function findClosestMsaRow(pdbSeq) {
@@ -459,8 +485,8 @@ function findClosestMsaRow(pdbSeq) {
   for (let i = 0; i < state.msa.seqs.length; i++) {
     const raw = ungap(state.msa.seqs[i]);
     if (raw.length === 0) continue;
-    const s = percentIdentityUngapped(pdbSeq, raw);
-    if (s > bestScore) { bestScore = s; bestIdx = i; }
+    const r = semiGlobalAlign(pdbSeq, raw);
+    if (r.identity > bestScore) { bestScore = r.identity; bestIdx = i; }
   }
   return { index: bestIdx, identity: bestScore };
 }
@@ -468,60 +494,26 @@ function findClosestMsaRow(pdbSeq) {
 /* =================================================================
    Map PDB residues -> MSA columns
    ================================================================= */
-function nwAlign(a, b) {
-  // Needleman-Wunsch alignment; returns aligned strings A2, B2.
-  const n = a.length, m = b.length;
-  const MATCH = 2, MISM = -1, GAP = -2;
-  const score = new Int32Array((n+1) * (m+1));
-  const back = new Uint8Array((n+1) * (m+1));   // 0 diag, 1 up, 2 left
-  const idx = (i,j) => i * (m+1) + j;
-  for (let i = 0; i <= n; i++) { score[idx(i,0)] = i * GAP; back[idx(i,0)] = 1; }
-  for (let j = 0; j <= m; j++) { score[idx(0,j)] = j * GAP; back[idx(0,j)] = 2; }
-  back[0] = 0;
-  for (let i = 1; i <= n; i++) {
-    for (let j = 1; j <= m; j++) {
-      const d = score[idx(i-1,j-1)] + (a[i-1] === b[j-1] ? MATCH : MISM);
-      const u = score[idx(i-1,j)] + GAP;
-      const l = score[idx(i,j-1)] + GAP;
-      let s = d, b_ = 0;
-      if (u > s) { s = u; b_ = 1; }
-      if (l > s) { s = l; b_ = 2; }
-      score[idx(i,j)] = s; back[idx(i,j)] = b_;
-    }
-  }
-  let i = n, j = m, A2 = "", B2 = "";
-  while (i > 0 || j > 0) {
-    const b_ = back[idx(i,j)];
-    if (b_ === 0 && i > 0 && j > 0) { A2 = a[i-1] + A2; B2 = b[j-1] + B2; i--; j--; }
-    else if (b_ === 1 && i > 0)     { A2 = a[i-1] + A2; B2 = "-" + B2; i--; }
-    else                             { A2 = "-" + A2; B2 = b[j-1] + B2; j--; }
-  }
-  return { a: A2, b: B2 };
-}
-
 function buildColumnMap() {
-  // For the selected chain and matched MSA row, build resi -> alignment column.
   const chain = state.chains[state.selectedChain];
-  if (!chain) { state.colMap = null; return; }
+  if (!chain) { state.colMap = null; state.colToResi = null; return; }
   const pdbSeq = chain.seq;
   const msaRow = state.msa.seqs[state.matchedIndex];
   const ungapped = ungap(msaRow);
 
   // Map: index in ungapped MSA row -> column index in aligned MSA row
   const ungapToCol = new Array(ungapped.length);
-  {
-    let u = 0;
-    for (let c = 0; c < msaRow.length; c++) {
-      if (msaRow[c] !== "-") ungapToCol[u++] = c;
-    }
+  let u = 0;
+  for (let c = 0; c < msaRow.length; c++) {
+    if (msaRow[c] !== "-") ungapToCol[u++] = c;
   }
 
-  // Align pdbSeq <-> ungapped (both ungapped strings)
-  const al = nwAlign(pdbSeq, ungapped);
-  // Walk the alignment: for each PDB residue position, note the corresponding MSA column (if matched)
+  // Semi-global align so a domain PDB maps cleanly into a full-ORF MSA row
+  const al = semiGlobalAlign(pdbSeq, ungapped);
+
   const colMap = {};
   const colToResi = {};
-  let pi = 0, mi = 0;
+  let pi = al.aStart, mi = al.bStart;
   for (let k = 0; k < al.a.length; k++) {
     const ca = al.a[k], cb = al.b[k];
     if (ca !== "-" && cb !== "-") {
