@@ -1,0 +1,1173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>PDB + MSA Conservation Viewer</title>
+<script src="https://3Dmol.org/build/3Dmol-min.js"></script>
+<style>
+  :root {
+    --bg: #1e1e1e;
+    --panel: #252526;
+    --border: #3c3c3c;
+    --text: #e0e0e0;
+    --muted: #999;
+    --accent: #4a9eff;
+    --match: #ffd54a;
+    --match-bg: #4a3e15;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; }
+  body { display: flex; flex-direction: column; }
+
+  #toolbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  #toolbar label, #toolbar button, #toolbar select, #toolbar input[type=text] {
+    font-size: 13px;
+  }
+  #toolbar .group { display: flex; align-items: center; gap: 6px; padding-right: 10px; border-right: 1px solid var(--border); }
+  #toolbar .group:last-child { border-right: none; }
+  button {
+    background: #0e639c; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; font-size: 13px;
+  }
+  button:hover { background: #1177bb; }
+  button:disabled { background: #555; cursor: not-allowed; }
+  button.style-toggle { background: #444; color: #ccc; padding: 4px 8px; font-size: 12px; }
+  button.style-toggle:hover { background: #555; }
+  button.style-toggle.active { background: var(--accent); color: #000; font-weight: 600; }
+
+  #help-wrap { position: relative; margin-left: auto; }
+  #help-panel {
+    position: absolute; top: 100%; right: 0; margin-top: 6px;
+    width: 380px; max-height: 80vh; overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 4px;
+    padding: 14px 18px; box-shadow: 0 6px 24px rgba(0,0,0,0.6);
+    z-index: 100; font-size: 12px; line-height: 1.55;
+  }
+  #help-panel h3 { margin: 0 0 10px 0; font-size: 14px; color: var(--accent); }
+  #help-panel h4 { margin: 12px 0 4px 0; font-size: 12px; color: var(--match); text-transform: uppercase; letter-spacing: 0.5px; }
+  #help-panel ul { margin: 0; padding-left: 18px; }
+  #help-panel li { margin-bottom: 3px; }
+  #help-panel kbd {
+    background: #3c3c3c; padding: 1px 5px; border-radius: 2px; font-family: monospace;
+    font-size: 11px; border: 1px solid #555;
+  }
+  #help-panel .swatch {
+    display: inline-block; width: 80px; height: 10px; vertical-align: middle;
+    background: linear-gradient(to right, rgb(16,200,230), #ffffff, rgb(140,20,40));
+    border: 1px solid #555;
+  }
+  input[type=text], select {
+    background: #3c3c3c; color: var(--text); border: 1px solid var(--border); padding: 4px 6px; border-radius: 3px;
+  }
+  input[type=file] { display: none; }
+
+  #main { flex: 1; display: flex; min-height: 0; }
+  #viewer-panel { flex: 1; min-width: 300px; position: relative; background: #000; }
+  #viewer { width: 100%; height: 100%; position: relative; }
+  #legend {
+    position: absolute; bottom: 10px; left: 10px; background: rgba(0,0,0,0.6);
+    padding: 8px 12px; border-radius: 4px; font-size: 11px; pointer-events: none;
+  }
+  #legend .bar { height: 10px; width: 180px; margin: 4px 0;
+    background: linear-gradient(to right, rgb(16,200,230), #ffffff, rgb(140,20,40));
+  }
+  #legend .labels { display: flex; justify-content: space-between; color: #ccc; }
+
+  #divider { width: 5px; background: var(--border); cursor: col-resize; }
+  #divider:hover { background: var(--accent); }
+
+  #msa-panel { width: 45%; min-width: 320px; display: flex; flex-direction: column; background: var(--panel); }
+  #msa-header {
+    padding: 8px 10px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px;
+    flex-wrap: wrap; position: sticky; top: 0; background: var(--panel); z-index: 3;
+  }
+  #msa-info { color: var(--muted); font-size: 12px; }
+  #msa-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 4px 0 12px; }
+  #msa-table { font-family: 'Consolas', 'Monaco', monospace; font-size: 12px; }
+  .msa-block { margin: 0 0 14px 0; padding: 0 8px; }
+  .msa-row { display: flex; align-items: center; height: 18px; white-space: nowrap; }
+  .msa-row:hover { background: #2d2d30; }
+  .msa-row.matched { background: var(--match-bg); }
+  .msa-row.matched:hover { background: #5a4e20; }
+  .msa-row.ruler-row, .msa-row.cons-row { background: transparent; }
+  .msa-row.ruler-row:hover, .msa-row.cons-row:hover { background: transparent; }
+  .msa-row.ruler-row { height: 14px; color: var(--muted); font-size: 10px; }
+  .msa-row.cons-row { height: 24px; }
+  .msa-row .controls { width: 200px; min-width: 200px; display: flex; align-items: center; gap: 6px; padding: 0 6px; border-right: 1px solid var(--border); flex-shrink: 0; }
+  .msa-row .controls input[type=checkbox] { margin: 0; flex-shrink: 0; }
+  .msa-row .name { overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+  .msa-row .badge { font-size: 9px; background: var(--match); color: #000; padding: 1px 4px; border-radius: 2px; font-weight: bold; flex-shrink: 0; }
+  .msa-row .seq { padding: 0 4px; letter-spacing: 0px; flex-shrink: 0; }
+  .msa-row .seq span { display: inline-block; width: 9px; text-align: center; cursor: pointer; }
+  .msa-row.ruler-row .seq span { cursor: default; }
+  .msa-row .seq span.col-highlight {
+    background: rgba(255, 213, 74, 0.35);
+    outline: 1px solid var(--match);
+    outline-offset: -1px;
+    color: #fff !important;
+  }
+  .msa-row .endnum { color: var(--muted); font-size: 11px; padding: 0 6px 0 8px; min-width: 48px; text-align: right; }
+  .msa-row .startnum { color: var(--muted); font-size: 11px; padding: 0 8px 0 6px; min-width: 48px; text-align: right; }
+  .msa-row.cons-row .cons-canvas { display: block; }
+
+  /* MSA residue colors (Clustal-like) */
+  .aa-A, .aa-I, .aa-L, .aa-M, .aa-F, .aa-W, .aa-V, .aa-C { color: #80a0ff; }
+  .aa-K, .aa-R { color: #ff4040; }
+  .aa-D, .aa-E { color: #c048c0; }
+  .aa-N, .aa-Q, .aa-S, .aa-T { color: #40c040; }
+  .aa-G { color: #f09048; }
+  .aa-P { color: #c0c000; }
+  .aa-H, .aa-Y { color: #15a4a4; }
+  .aa-gap { color: #b0b0b0; font-weight: 700; }
+
+  #status { padding: 4px 12px; background: #007acc; color: white; font-size: 12px; }
+  #status.error { background: #b73a3a; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <div class="group">
+    <label><button onclick="document.getElementById('pdb-file').click()">Load PDB file</button>
+      <input type="file" id="pdb-file" accept=".pdb,.ent,.cif" />
+    </label>
+    <input type="text" id="pdb-id" placeholder="PDB ID (e.g. 1IED)" size="10" />
+    <button id="fetch-pdb">Fetch RCSB</button>
+    <select id="chain-select" style="display:none"></select>
+  </div>
+  <div class="group">
+    <label><button onclick="document.getElementById('msa-file').click()">Load MSA</button>
+      <input type="file" id="msa-file" accept=".fasta,.fa,.fas,.aln,.clustal,.clu,.txt" />
+    </label>
+    <span id="msa-info"></span>
+  </div>
+  <div class="group">
+    <label>Conservation:
+      <select id="conservation-mode">
+        <option value="pairwise" selected>% pairwise identity</option>
+        <option value="entropy">Shannon entropy</option>
+      </select>
+    </label>
+    <span style="color:var(--muted)">Show:</span>
+    <button class="style-toggle active" data-style="cartoon">Cartoon</button>
+    <button class="style-toggle" data-style="stick">Stick</button>
+    <button class="style-toggle" data-style="sphere">Sphere</button>
+    <button class="style-toggle" data-style="line">Line</button>
+    <button class="style-toggle" data-style="surface">Surface</button>
+    <label style="color:var(--muted); font-size:12px;">α
+      <input type="range" id="surface-opacity" min="0.1" max="1" step="0.05" value="0.6" style="width:70px; vertical-align:middle;">
+      <span id="surface-opacity-val">0.60</span>
+    </label>
+  </div>
+  <div class="group">
+    <button id="toggle-all-on">All on</button>
+    <button id="toggle-all-off">All off</button>
+  </div>
+  <div id="help-wrap">
+    <button id="help-btn" title="Quick guide">? Help</button>
+    <div id="help-panel" style="display: none;">
+      <h3>Quick guide</h3>
+
+      <h4>Loading data</h4>
+      <ul>
+        <li><b>Load PDB file</b> — opens a local <code>.pdb</code> or <code>.cif</code>.</li>
+        <li><b>Fetch RCSB</b> — type a 4-character PDB ID (e.g. <code>1IED</code>) and press Enter.</li>
+        <li><b>Load MSA</b> — accepts FASTA (<code>.fasta</code>, <code>.fa</code>) or Clustal (<code>.aln</code>, <code>.clustal</code>); format auto-detected.</li>
+        <li>For multi-chain PDBs, a chain selector appears (defaults to the longest chain).</li>
+      </ul>
+
+      <h4>Sequence matching</h4>
+      <ul>
+        <li>The MSA row most similar to the PDB chain is auto-matched, highlighted yellow with a <b>MATCH</b> badge, and locked on.</li>
+        <li>Toggle other sequences with the checkboxes — conservation recomputes instantly.</li>
+        <li><b>All on / All off</b> for bulk toggling (the matched row stays on).</li>
+      </ul>
+
+      <h4>Conservation</h4>
+      <ul>
+        <li><b>% pairwise identity</b> (default): mean identity over all pairs of active sequences at each column. Gap-rich columns score lower.</li>
+        <li><b>Shannon entropy</b>: information-theoretic measure; gaps excluded.</li>
+        <li>Color ramp <span class="swatch"></span> &nbsp;cyan (variable) → white → maroon (conserved).</li>
+      </ul>
+
+      <h4>3D view</h4>
+      <ul>
+        <li>Mix any of <b>Cartoon · Stick · Sphere · Line · Surface</b> by toggling the buttons.</li>
+        <li><b>α</b> slider controls surface transparency.</li>
+        <li>Default on MSA load: <b>Stick + Surface</b> at α = 0.80.</li>
+        <li>Mouse: left-drag rotate · scroll zoom · right-drag pan.</li>
+      </ul>
+
+      <h4>Linked selection</h4>
+      <ul>
+        <li>Click a residue in the 3D view → highlights its MSA column.</li>
+        <li>Click a residue cell in the MSA → labels the matching residue on the structure.</li>
+        <li>Residues outside the alignment are labeled and the column highlight clears.</li>
+        <li><kbd>Esc</kbd> clears all highlights and labels.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div id="main">
+  <div id="viewer-panel">
+    <div id="viewer"></div>
+    <div id="legend">
+      <div>Conservation</div>
+      <div class="bar"></div>
+      <div class="labels"><span>variable</span><span>conserved</span></div>
+    </div>
+  </div>
+  <div id="divider"></div>
+  <div id="msa-panel">
+    <div id="msa-header">
+      <span id="msa-summary" style="color: var(--muted);">No MSA loaded</span>
+    </div>
+    <div id="msa-scroll">
+      <div id="msa-table"></div>
+    </div>
+  </div>
+</div>
+
+<div id="status">Ready.</div>
+
+<script>
+"use strict";
+
+/* =================================================================
+   Global state
+   ================================================================= */
+const state = {
+  viewer: null,
+  pdbAtoms: null,           // parsed atoms (3Dmol)
+  pdbModel: null,           // model handle
+  chains: {},               // chain -> { seq: "ACDE...", resis: [12,13,...] }
+  selectedChain: null,
+  msa: null,                // { names: [], seqs: [] }  (aligned, equal length, uppercase)
+  active: null,             // boolean[] per sequence — toggle state
+  matchedIndex: -1,         // which MSA row matched the PDB chain
+  colMap: null,             // resi -> alignment column (for selected chain)
+  colToResi: null,          // alignment column -> PDB resi (reverse of colMap)
+  conservation: null,       // number[] per column [0,1]
+  conservationMode: "pairwise",
+  styleModes: new Set(["cartoon"]),
+  surfaceOpacity: 0.6,
+  highlightCol: null,    // currently-highlighted MSA column (driven by 3D click)
+};
+const ATOM_STYLES = ["cartoon", "stick", "sphere", "line"];
+
+/* =================================================================
+   3Dmol viewer setup
+   ================================================================= */
+function initViewer() {
+  state.viewer = $3Dmol.createViewer("viewer", { backgroundColor: "black" });
+}
+
+/* =================================================================
+   Status / errors
+   ================================================================= */
+function setStatus(msg, isError) {
+  const el = document.getElementById("status");
+  el.textContent = msg;
+  el.className = isError ? "error" : "";
+}
+
+/* =================================================================
+   Amino acid utilities
+   ================================================================= */
+const THREE_TO_ONE = {
+  ALA:"A", ARG:"R", ASN:"N", ASP:"D", CYS:"C", GLN:"Q", GLU:"E",
+  GLY:"G", HIS:"H", ILE:"I", LEU:"L", LYS:"K", MET:"M", PHE:"F",
+  PRO:"P", SER:"S", THR:"T", TRP:"W", TYR:"Y", VAL:"V",
+  MSE:"M", SEC:"U", PYL:"O",
+};
+const STANDARD_AA = "ACDEFGHIKLMNPQRSTVWY";
+
+/* =================================================================
+   PDB loading
+   ================================================================= */
+async function fetchPdb(pdbId) {
+  pdbId = pdbId.trim().toLowerCase();
+  if (!/^[a-z0-9]{4}$/.test(pdbId)) throw new Error("PDB ID must be 4 characters");
+  setStatus(`Fetching ${pdbId.toUpperCase()} from RCSB...`);
+  const url = `https://files.rcsb.org/download/${pdbId}.pdb`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`RCSB fetch failed (HTTP ${resp.status})`);
+  return await resp.text();
+}
+
+function loadPdbText(text, format) {
+  format = format || "pdb";
+  state.viewer.removeAllModels();
+  state.viewer.removeAllSurfaces();
+  state.viewer.removeAllLabels();
+  state.highlightCol = null;
+  state.pdbModel = state.viewer.addModel(text, format);
+  state.pdbAtoms = state.pdbModel.selectedAtoms({});
+  extractChains();
+  populateChainSelect();
+  applyStyle();
+  state.viewer.zoomTo();
+  state.viewer.render();
+  if (state.msa) {
+    rematchAndRender();
+  } else {
+    setStatus(`Loaded structure. ${Object.keys(state.chains).length} chain(s). Load an MSA to color by conservation.`);
+  }
+}
+
+function extractChains() {
+  state.chains = {};
+  const seen = {};               // chain -> Set of resi
+  for (const atom of state.pdbAtoms) {
+    if (atom.hetflag) continue;  // skip HETATM (ligands, waters)
+    const chain = atom.chain;
+    const resi = atom.resi;
+    const resn = atom.resn;
+    const aa = THREE_TO_ONE[resn];
+    if (!aa) continue;
+    if (!seen[chain]) { seen[chain] = new Set(); state.chains[chain] = { seq: "", resis: [] }; }
+    const key = resi;
+    if (seen[chain].has(key)) continue;
+    seen[chain].add(key);
+    state.chains[chain].seq += aa;
+    state.chains[chain].resis.push(resi);
+  }
+  // pick longest chain by default
+  let best = null, bestLen = -1;
+  for (const c in state.chains) {
+    if (state.chains[c].seq.length > bestLen) { bestLen = state.chains[c].seq.length; best = c; }
+  }
+  state.selectedChain = best;
+}
+
+function populateChainSelect() {
+  const sel = document.getElementById("chain-select");
+  sel.innerHTML = "";
+  const chains = Object.keys(state.chains);
+  if (chains.length <= 1) { sel.style.display = "none"; return; }
+  sel.style.display = "";
+  for (const c of chains) {
+    const opt = document.createElement("option");
+    opt.value = c;
+    opt.textContent = `Chain ${c} (${state.chains[c].seq.length} aa)`;
+    if (c === state.selectedChain) opt.selected = true;
+    sel.appendChild(opt);
+  }
+}
+
+/* =================================================================
+   MSA parsing
+   ================================================================= */
+function parseMsa(text) {
+  text = text.replace(/\r\n/g, "\n");
+  const trimmed = text.trim();
+  if (trimmed.startsWith(">")) return parseFasta(trimmed);
+  if (/^CLUSTAL/i.test(trimmed)) return parseClustal(trimmed);
+  throw new Error("Unrecognized alignment format (expected FASTA starting with '>' or Clustal starting with 'CLUSTAL')");
+}
+
+function parseFasta(text) {
+  const names = [], seqs = [];
+  let curName = null, curSeq = "";
+  for (const line of text.split("\n")) {
+    if (line.startsWith(">")) {
+      if (curName !== null) { names.push(curName); seqs.push(curSeq); }
+      curName = line.slice(1).trim().split(/\s+/)[0] || `seq${names.length+1}`;
+      curSeq = "";
+    } else {
+      curSeq += line.replace(/\s+/g, "");
+    }
+  }
+  if (curName !== null) { names.push(curName); seqs.push(curSeq); }
+  return finalizeMsa(names, seqs);
+}
+
+function parseClustal(text) {
+  const lines = text.split("\n");
+  const seqMap = new Map();   // preserve insertion order
+  let inBody = false;
+  for (let i = 1; i < lines.length; i++) {     // skip header
+    const line = lines[i];
+    if (!line.trim()) { inBody = true; continue; }
+    if (!inBody) continue;
+    // Conservation line: starts with spaces or contains only " .:*"
+    if (/^[\s.:*]+$/.test(line)) continue;
+    const m = line.match(/^(\S+)\s+([A-Za-z\-\.~]+)(?:\s+\d+)?\s*$/);
+    if (!m) continue;
+    const name = m[1], part = m[2];
+    if (!seqMap.has(name)) seqMap.set(name, "");
+    seqMap.set(name, seqMap.get(name) + part);
+  }
+  const names = Array.from(seqMap.keys());
+  const seqs = names.map(n => seqMap.get(n));
+  return finalizeMsa(names, seqs);
+}
+
+function finalizeMsa(names, seqs) {
+  if (seqs.length === 0) throw new Error("MSA contains no sequences");
+  // Normalize: uppercase, ".~" -> "-"
+  seqs = seqs.map(s => s.toUpperCase().replace(/[.~]/g, "-"));
+  const len = seqs[0].length;
+  for (let i = 1; i < seqs.length; i++) {
+    if (seqs[i].length !== len) throw new Error(`Sequences have unequal length (row 1: ${len}, row ${i+1}: ${seqs[i].length}). Not a valid alignment.`);
+  }
+  return { names, seqs };
+}
+
+/* =================================================================
+   Matching the PDB chain to the closest MSA row
+   ================================================================= */
+function ungap(s) { return s.replace(/-/g, ""); }
+
+function percentIdentityUngapped(a, b) {
+  // simple sliding ungapped match length-normalized; fallback to alignment when lengths differ
+  if (a.length === b.length) {
+    let match = 0;
+    for (let i = 0; i < a.length; i++) if (a[i] === b[i]) match++;
+    return match / a.length;
+  }
+  // Use lightweight Needleman-Wunsch identity
+  return nwIdentity(a, b);
+}
+
+function nwIdentity(a, b) {
+  // Lightweight NW with match=1, mismatch=0, gap=-1; returns identity = matches / max(len)
+  const n = a.length, m = b.length;
+  if (n === 0 || m === 0) return 0;
+  const GAP = -1;
+  // Use two rolling rows
+  let prev = new Int32Array(m + 1);
+  let cur = new Int32Array(m + 1);
+  for (let j = 0; j <= m; j++) prev[j] = GAP * j;
+  for (let i = 1; i <= n; i++) {
+    cur[0] = GAP * i;
+    for (let j = 1; j <= m; j++) {
+      const match = (a[i-1] === b[j-1]) ? 1 : 0;
+      cur[j] = Math.max(prev[j-1] + match, prev[j] + GAP, cur[j-1] + GAP);
+    }
+    const tmp = prev; prev = cur; cur = tmp;
+  }
+  // matches ~ score (since mismatch=0, gaps negative). Use prev[m] / max(n,m)
+  return Math.max(0, prev[m]) / Math.max(n, m);
+}
+
+function findClosestMsaRow(pdbSeq) {
+  let bestIdx = 0, bestScore = -1;
+  for (let i = 0; i < state.msa.seqs.length; i++) {
+    const raw = ungap(state.msa.seqs[i]);
+    if (raw.length === 0) continue;
+    const s = percentIdentityUngapped(pdbSeq, raw);
+    if (s > bestScore) { bestScore = s; bestIdx = i; }
+  }
+  return { index: bestIdx, identity: bestScore };
+}
+
+/* =================================================================
+   Map PDB residues -> MSA columns
+   ================================================================= */
+function nwAlign(a, b) {
+  // Needleman-Wunsch alignment; returns aligned strings A2, B2.
+  const n = a.length, m = b.length;
+  const MATCH = 2, MISM = -1, GAP = -2;
+  const score = new Int32Array((n+1) * (m+1));
+  const back = new Uint8Array((n+1) * (m+1));   // 0 diag, 1 up, 2 left
+  const idx = (i,j) => i * (m+1) + j;
+  for (let i = 0; i <= n; i++) { score[idx(i,0)] = i * GAP; back[idx(i,0)] = 1; }
+  for (let j = 0; j <= m; j++) { score[idx(0,j)] = j * GAP; back[idx(0,j)] = 2; }
+  back[0] = 0;
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      const d = score[idx(i-1,j-1)] + (a[i-1] === b[j-1] ? MATCH : MISM);
+      const u = score[idx(i-1,j)] + GAP;
+      const l = score[idx(i,j-1)] + GAP;
+      let s = d, b_ = 0;
+      if (u > s) { s = u; b_ = 1; }
+      if (l > s) { s = l; b_ = 2; }
+      score[idx(i,j)] = s; back[idx(i,j)] = b_;
+    }
+  }
+  let i = n, j = m, A2 = "", B2 = "";
+  while (i > 0 || j > 0) {
+    const b_ = back[idx(i,j)];
+    if (b_ === 0 && i > 0 && j > 0) { A2 = a[i-1] + A2; B2 = b[j-1] + B2; i--; j--; }
+    else if (b_ === 1 && i > 0)     { A2 = a[i-1] + A2; B2 = "-" + B2; i--; }
+    else                             { A2 = "-" + A2; B2 = b[j-1] + B2; j--; }
+  }
+  return { a: A2, b: B2 };
+}
+
+function buildColumnMap() {
+  // For the selected chain and matched MSA row, build resi -> alignment column.
+  const chain = state.chains[state.selectedChain];
+  if (!chain) { state.colMap = null; return; }
+  const pdbSeq = chain.seq;
+  const msaRow = state.msa.seqs[state.matchedIndex];
+  const ungapped = ungap(msaRow);
+
+  // Map: index in ungapped MSA row -> column index in aligned MSA row
+  const ungapToCol = new Array(ungapped.length);
+  {
+    let u = 0;
+    for (let c = 0; c < msaRow.length; c++) {
+      if (msaRow[c] !== "-") ungapToCol[u++] = c;
+    }
+  }
+
+  // Align pdbSeq <-> ungapped (both ungapped strings)
+  const al = nwAlign(pdbSeq, ungapped);
+  // Walk the alignment: for each PDB residue position, note the corresponding MSA column (if matched)
+  const colMap = {};
+  const colToResi = {};
+  let pi = 0, mi = 0;
+  for (let k = 0; k < al.a.length; k++) {
+    const ca = al.a[k], cb = al.b[k];
+    if (ca !== "-" && cb !== "-") {
+      const resi = chain.resis[pi];
+      const col = ungapToCol[mi];
+      colMap[resi] = col;
+      colToResi[col] = resi;
+      pi++; mi++;
+    } else if (ca !== "-") {
+      pi++;
+    } else if (cb !== "-") {
+      mi++;
+    }
+  }
+  state.colMap = colMap;
+  state.colToResi = colToResi;
+}
+
+/* =================================================================
+   Conservation
+   ================================================================= */
+function computeConservation() {
+  if (!state.msa) return;
+  const seqs = state.msa.seqs;
+  const len = seqs[0].length;
+  const active = state.active;
+  const mode = state.conservationMode;
+  const cons = new Float32Array(len);
+
+  let totalActive = 0;
+  for (let i = 0; i < seqs.length; i++) if (active[i]) totalActive++;
+
+  for (let c = 0; c < len; c++) {
+    const counts = {};
+    let totalRes = 0;
+    for (let i = 0; i < seqs.length; i++) {
+      if (!active[i]) continue;
+      const ch = seqs[i][c];
+      if (ch === "-" || ch === "X" || ch === "B" || ch === "Z" || ch === "J") continue;
+      counts[ch] = (counts[ch] || 0) + 1;
+      totalRes++;
+    }
+    if (totalActive === 0) { cons[c] = 0; continue; }
+    if (mode === "entropy") {
+      if (totalRes === 0) { cons[c] = 0; continue; }
+      let H = 0;
+      for (const aa in counts) {
+        const p = counts[aa] / totalRes;
+        H -= p * Math.log2(p);
+      }
+      const v = 1 - H / Math.log2(20);
+      cons[c] = Math.max(0, Math.min(1, v));
+    } else {
+      // Mean pairwise % identity at this column over all active sequence pairs.
+      // Matching pairs per residue x = C(count_x, 2); total pairs = C(N, 2)
+      // where N = total active sequences (gap-containing pairs count toward total
+      // but not toward matches, so gap-rich columns score lower).
+      const N = totalActive;
+      const totalPairs = N * (N - 1) / 2;
+      if (totalPairs === 0) { cons[c] = 0; continue; }
+      let matchingPairs = 0;
+      for (const aa in counts) {
+        const n = counts[aa];
+        matchingPairs += n * (n - 1) / 2;
+      }
+      cons[c] = matchingPairs / totalPairs;
+    }
+  }
+  state.conservation = cons;
+}
+
+/* =================================================================
+   Coloring
+   ================================================================= */
+function conservationColor(v) {
+  // ConSurf-style: cyan (variable) -> white -> maroon (conserved)
+  const CYAN   = [ 16, 200, 230];
+  const WHITE  = [255, 255, 255];
+  const MAROON = [140,  20,  40];
+  let r, g, b;
+  if (v < 0.5) {
+    const t = v / 0.5;
+    r = Math.round(CYAN[0]  + (WHITE[0]  - CYAN[0])  * t);
+    g = Math.round(CYAN[1]  + (WHITE[1]  - CYAN[1])  * t);
+    b = Math.round(CYAN[2]  + (WHITE[2]  - CYAN[2])  * t);
+  } else {
+    const t = (v - 0.5) / 0.5;
+    r = Math.round(WHITE[0] + (MAROON[0] - WHITE[0]) * t);
+    g = Math.round(WHITE[1] + (MAROON[1] - WHITE[1]) * t);
+    b = Math.round(WHITE[2] + (MAROON[2] - WHITE[2]) * t);
+  }
+  return (r << 16) | (g << 8) | b;
+}
+
+function applyStyle() {
+  if (!state.viewer || !state.pdbModel) return;
+  state.viewer.removeAllSurfaces();
+
+  // Set atom.color directly so every active style + the surface share one source of truth
+  for (const atom of state.pdbAtoms) {
+    if (atom.hetflag) {
+      atom.color = 0x999999;
+    } else if (atom.chain === state.selectedChain) {
+      if (state.colMap && state.conservation && state.colMap[atom.resi] !== undefined) {
+        const v = state.conservation[state.colMap[atom.resi]] || 0;
+        atom.color = conservationColor(v);
+      } else if (state.colMap) {
+        atom.color = 0x444444;     // residue in selected chain not mapped to MSA
+      } else {
+        atom.color = 0xcccccc;
+      }
+    } else {
+      atom.color = 0x888888;
+    }
+  }
+
+  const activeAtom = ATOM_STYLES.filter(s => state.styleModes.has(s));
+
+  // Clear, then apply combined atom styles. Empty spec uses atom.color.
+  state.viewer.setStyle({}, {});
+  if (activeAtom.length > 0) {
+    const styleObj = {};
+    for (const s of activeAtom) styleObj[s] = {};
+    state.viewer.setStyle({}, styleObj);
+    // Ensure HET atoms show as sticks whenever any atom style is on
+    state.viewer.setStyle({ hetflag: true }, { stick: {} });
+  }
+
+  if (state.styleModes.has("surface")) {
+    const surfSel = state.selectedChain ? { chain: state.selectedChain } : {};
+    state.viewer.addSurface($3Dmol.SurfaceType.VDW,
+      { opacity: state.surfaceOpacity },
+      surfSel
+    );
+  }
+
+  // Make all atoms clickable; clicks highlight the matching MSA column
+  state.viewer.setClickable({}, true, onAtomClick);
+
+  state.viewer.render();
+}
+
+function onAtomClick(atom, viewer) {
+  viewer.removeAllLabels();
+  const resi = atom.resi;
+  const chain = atom.chain;
+  const resn = atom.resn;
+  let labelText, labelColor;
+
+  if (chain === state.selectedChain && state.colMap && state.colMap[resi] != null) {
+    const col = state.colMap[resi];
+    state.highlightCol = col;
+    applyMsaColumnHighlight(col, /*scroll=*/true);
+    labelText = `${resn} ${resi} → col ${col + 1}`;
+    labelColor = "#ffd54a";
+  } else {
+    state.highlightCol = null;
+    applyMsaColumnHighlight(null);
+    labelText = `${resn} ${resi}${chain ? " · chain " + chain : ""} — not in alignment`;
+    labelColor = "#ddd";
+  }
+
+  viewer.addLabel(labelText, {
+    position: { x: atom.x, y: atom.y, z: atom.z },
+    backgroundColor: "rgba(0,0,0,0.85)",
+    fontColor: labelColor,
+    fontSize: 12,
+    borderColor: labelColor,
+    borderThickness: 1,
+    inFront: true,
+  });
+  viewer.render();
+}
+
+function clearHighlight() {
+  state.highlightCol = null;
+  applyMsaColumnHighlight(null);
+  if (state.viewer) { state.viewer.removeAllLabels(); state.viewer.render(); }
+}
+
+function setDefaultMsaStyle() {
+  state.styleModes = new Set(["stick", "surface"]);
+  state.surfaceOpacity = 0.8;
+  document.querySelectorAll(".style-toggle").forEach(btn => {
+    btn.classList.toggle("active", state.styleModes.has(btn.dataset.style));
+  });
+  const slider = document.getElementById("surface-opacity");
+  const sliderVal = document.getElementById("surface-opacity-val");
+  if (slider) slider.value = "0.8";
+  if (sliderVal) sliderVal.textContent = "0.80";
+}
+
+/* =================================================================
+   MSA rendering (block-wrapped, Clustal-style)
+   ================================================================= */
+const CELL_W = 9;
+const CONTROLS_W = 200;
+const NUM_W = 48;     // start + end number columns
+const BLOCK_GUTTER = 24;  // misc padding/border budget
+
+function computeBlockSize() {
+  const scroll = document.getElementById("msa-scroll");
+  const avail = scroll.clientWidth - CONTROLS_W - NUM_W * 2 - BLOCK_GUTTER;
+  return Math.max(10, Math.floor(avail / CELL_W));
+}
+
+function updateSummary() {
+  const summary = document.getElementById("msa-summary");
+  if (!state.msa) { summary.textContent = "No MSA loaded"; return; }
+  const total = state.msa.seqs.length;
+  const activeCount = state.active.filter(Boolean).length;
+  const matchedName = state.msa.names[state.matchedIndex];
+  const matchedHtml = state.matchedIndex >= 0
+    ? `&nbsp;|&nbsp; matched: <b style="color:var(--match)">${escapeHtml(matchedName)}</b>`
+    : "";
+  summary.innerHTML = `${total} sequences, ${state.msa.seqs[0].length} columns &nbsp;|&nbsp; active: <b>${activeCount}</b>${matchedHtml}`;
+}
+
+function renderMsa() {
+  updateSummary();
+  const table = document.getElementById("msa-table");
+  table.innerHTML = "";
+  if (!state.msa) return;
+
+  const seqs = state.msa.seqs;
+  const len = seqs[0].length;
+  const cols = computeBlockSize();
+  const runCount = new Array(seqs.length).fill(0);
+
+  for (let blockStart = 0; blockStart < len; blockStart += cols) {
+    const blockEnd = Math.min(blockStart + cols, len);
+    const block = document.createElement("div");
+    block.className = "msa-block";
+    block.dataset.blockStart = blockStart;
+    block.dataset.blockEnd = blockEnd;
+
+    // Column ruler row
+    const rulerRow = document.createElement("div");
+    rulerRow.className = "msa-row ruler-row";
+    const rulerCtrl = document.createElement("div"); rulerCtrl.className = "controls";
+    rulerCtrl.textContent = `cols ${blockStart+1}-${blockEnd}`;
+    rulerRow.appendChild(rulerCtrl);
+    const rulerStart = document.createElement("span"); rulerStart.className = "startnum";
+    rulerStart.textContent = blockStart + 1;
+    rulerRow.appendChild(rulerStart);
+    const rulerSpan = document.createElement("span"); rulerSpan.className = "seq";
+    let rs = "";
+    for (let c = blockStart; c < blockEnd; c++) {
+      rs += ((c+1) % 10 === 0) ? `<span>|</span>` : `<span>·</span>`;
+    }
+    rulerSpan.innerHTML = rs;
+    rulerRow.appendChild(rulerSpan);
+    const rulerEnd = document.createElement("span"); rulerEnd.className = "endnum";
+    rulerEnd.textContent = blockEnd;
+    rulerRow.appendChild(rulerEnd);
+    block.appendChild(rulerRow);
+
+    // Conservation bar
+    const consRow = document.createElement("div");
+    consRow.className = "msa-row cons-row";
+    const consCtrl = document.createElement("div"); consCtrl.className = "controls";
+    consCtrl.style.color = "var(--muted)";
+    consCtrl.textContent = "conservation";
+    consRow.appendChild(consCtrl);
+    const consPad1 = document.createElement("span"); consPad1.className = "startnum";
+    consRow.appendChild(consPad1);
+    const canvas = document.createElement("canvas");
+    canvas.className = "cons-canvas";
+    canvas.width = (blockEnd - blockStart) * CELL_W;
+    canvas.height = 22;
+    canvas.dataset.start = blockStart;
+    canvas.dataset.end = blockEnd;
+    consRow.appendChild(canvas);
+    drawConservationBarRange(canvas, blockStart, blockEnd);
+    const consPad2 = document.createElement("span"); consPad2.className = "endnum";
+    consRow.appendChild(consPad2);
+    block.appendChild(consRow);
+
+    // Sequence rows
+    for (let i = 0; i < seqs.length; i++) {
+      const row = document.createElement("div");
+      row.className = "msa-row" + (i === state.matchedIndex ? " matched" : "");
+      const controls = document.createElement("div"); controls.className = "controls";
+      const cb = document.createElement("input"); cb.type = "checkbox";
+      cb.checked = state.active[i]; cb.dataset.idx = i;
+      if (i === state.matchedIndex) { cb.disabled = true; cb.title = "Matched to PDB — cannot be disabled"; }
+      cb.addEventListener("change", onSeqToggle);
+      controls.appendChild(cb);
+      const name = document.createElement("span"); name.className = "name";
+      name.textContent = state.msa.names[i]; name.title = state.msa.names[i];
+      controls.appendChild(name);
+      if (i === state.matchedIndex) {
+        const badge = document.createElement("span"); badge.className = "badge"; badge.textContent = "MATCH";
+        controls.appendChild(badge);
+      }
+      row.appendChild(controls);
+
+      const chunk = seqs[i].substring(blockStart, blockEnd);
+      let chunkResCount = 0;
+      for (let k = 0; k < chunk.length; k++) if (chunk[k] !== "-") chunkResCount++;
+      const hasResidue = chunkResCount > 0;
+
+      const startSpan = document.createElement("span"); startSpan.className = "startnum";
+      startSpan.textContent = hasResidue ? (runCount[i] + 1) : "—";
+      row.appendChild(startSpan);
+
+      const seq = document.createElement("span"); seq.className = "seq";
+      seq.innerHTML = renderSequenceHtml(chunk);
+      row.appendChild(seq);
+
+      runCount[i] += chunkResCount;
+      const endSpan = document.createElement("span"); endSpan.className = "endnum";
+      endSpan.textContent = hasResidue ? runCount[i] : "—";
+      row.appendChild(endSpan);
+
+      block.appendChild(row);
+    }
+
+    table.appendChild(block);
+  }
+
+  // Re-apply column highlight if one is active
+  if (state.highlightCol != null) applyMsaColumnHighlight(state.highlightCol, /*scroll=*/false);
+}
+
+function renderSequenceHtml(s) {
+  let html = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    const cls = c === "-" ? "aa-gap" : `aa-${c}`;
+    html += `<span class="${cls}">${c}</span>`;
+  }
+  return html;
+}
+
+function drawConservationBarRange(canvas, start, end) {
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!state.conservation) return;
+  const w = CELL_W, h = canvas.height;
+  for (let i = start; i < end; i++) {
+    const v = state.conservation[i] || 0;
+    const c = conservationColor(v);
+    const r = (c >> 16) & 0xff, g = (c >> 8) & 0xff, b = c & 0xff;
+    const barH = Math.max(2, Math.round(v * h));
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.fillRect((i - start) * w, h - barH, w - 1, barH);
+  }
+}
+
+function redrawAllConservationCanvases() {
+  document.querySelectorAll("#msa-table .cons-canvas").forEach(c => {
+    drawConservationBarRange(c, parseInt(c.dataset.start, 10), parseInt(c.dataset.end, 10));
+  });
+  // Re-apply highlight marker on the canvas if one is active
+  if (state.highlightCol != null) drawHighlightOnCanvas(state.highlightCol);
+}
+
+function drawHighlightOnCanvas(col) {
+  const blocks = document.querySelectorAll("#msa-table .msa-block");
+  for (const block of blocks) {
+    const start = parseInt(block.dataset.blockStart, 10);
+    const end = parseInt(block.dataset.blockEnd, 10);
+    if (col >= start && col < end) {
+      const canvas = block.querySelector(".cons-canvas");
+      if (canvas) {
+        const ctx = canvas.getContext("2d");
+        ctx.strokeStyle = "rgba(255, 213, 74, 0.95)";
+        ctx.lineWidth = 2;
+        ctx.strokeRect((col - start) * CELL_W + 1, 1, CELL_W - 2, canvas.height - 2);
+      }
+      return;
+    }
+  }
+}
+
+function applyMsaColumnHighlight(col, scroll) {
+  // Clear all previous highlights
+  document.querySelectorAll("#msa-table .col-highlight").forEach(el => el.classList.remove("col-highlight"));
+  // Redraw canvases (which clears any highlight marker)
+  document.querySelectorAll("#msa-table .cons-canvas").forEach(c => {
+    drawConservationBarRange(c, parseInt(c.dataset.start, 10), parseInt(c.dataset.end, 10));
+  });
+  if (col == null || col < 0) return;
+  const blocks = document.querySelectorAll("#msa-table .msa-block");
+  for (const block of blocks) {
+    const start = parseInt(block.dataset.blockStart, 10);
+    const end = parseInt(block.dataset.blockEnd, 10);
+    if (col >= start && col < end) {
+      const offset = col - start;
+      block.querySelectorAll(".msa-row .seq").forEach(seqEl => {
+        const child = seqEl.children[offset];
+        if (child) child.classList.add("col-highlight");
+      });
+      drawHighlightOnCanvas(col);
+      if (scroll !== false) {
+        const scrollEl = document.getElementById("msa-scroll");
+        const blockTop = block.offsetTop;
+        const top = scrollEl.scrollTop;
+        const bottom = top + scrollEl.clientHeight;
+        if (blockTop < top || blockTop + block.offsetHeight > bottom) {
+          scrollEl.scrollTo({ top: Math.max(0, blockTop - 40), behavior: "smooth" });
+        }
+      }
+      return;
+    }
+  }
+}
+
+function onSeqToggle(e) {
+  const i = parseInt(e.target.dataset.idx, 10);
+  state.active[i] = e.target.checked;
+  // sync all checkbox instances for this sequence across blocks
+  document.querySelectorAll(`#msa-table input[type=checkbox][data-idx="${i}"]`).forEach(cb => {
+    if (!cb.disabled) cb.checked = state.active[i];
+  });
+  computeConservation();
+  applyStyle();
+  redrawAllConservationCanvases();
+  updateSummary();
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+/* =================================================================
+   Orchestration: re-match and re-render after PDB or MSA changes
+   ================================================================= */
+function rematchAndRender() {
+  if (!state.msa || !state.selectedChain) return;
+  state.active = new Array(state.msa.seqs.length).fill(true);
+  const pdbSeq = state.chains[state.selectedChain].seq;
+  const match = findClosestMsaRow(pdbSeq);
+  state.matchedIndex = match.index;
+  state.active[match.index] = true;   // always on
+  buildColumnMap();
+  computeConservation();
+  applyStyle();
+  renderMsa();
+  setStatus(`Matched chain ${state.selectedChain} to "${state.msa.names[match.index]}" (${(match.identity*100).toFixed(1)}% identity).`);
+}
+
+/* =================================================================
+   Event wiring
+   ================================================================= */
+function wireEvents() {
+  document.getElementById("pdb-file").addEventListener("change", async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    setStatus(`Loading ${f.name}...`);
+    try {
+      const text = await f.text();
+      const fmt = f.name.toLowerCase().endsWith(".cif") ? "cif" : "pdb";
+      loadPdbText(text, fmt);
+    } catch (err) { setStatus(err.message, true); console.error(err); }
+  });
+
+  document.getElementById("fetch-pdb").addEventListener("click", async () => {
+    const id = document.getElementById("pdb-id").value;
+    try {
+      const text = await fetchPdb(id);
+      loadPdbText(text, "pdb");
+    } catch (err) { setStatus(err.message, true); console.error(err); }
+  });
+
+  document.getElementById("msa-file").addEventListener("change", async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    setStatus(`Parsing ${f.name}...`);
+    try {
+      const text = await f.text();
+      state.msa = parseMsa(text);
+      state.highlightCol = null;
+      setDefaultMsaStyle();
+      if (state.pdbModel && state.selectedChain) {
+        rematchAndRender();
+      } else {
+        state.active = new Array(state.msa.seqs.length).fill(true);
+        state.matchedIndex = -1;
+        computeConservation();
+        renderMsa();
+        setStatus(`MSA loaded: ${state.msa.seqs.length} sequences. Load a PDB to map conservation onto structure.`);
+      }
+    } catch (err) { setStatus(err.message, true); console.error(err); }
+  });
+
+  document.getElementById("chain-select").addEventListener("change", (e) => {
+    state.selectedChain = e.target.value;
+    if (state.msa) rematchAndRender(); else applyStyle();
+  });
+
+  document.getElementById("conservation-mode").addEventListener("change", (e) => {
+    state.conservationMode = e.target.value;
+    if (state.msa) {
+      computeConservation();
+      applyStyle();
+      redrawAllConservationCanvases();
+    }
+  });
+
+  document.querySelectorAll(".style-toggle").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const s = btn.dataset.style;
+      if (state.styleModes.has(s)) state.styleModes.delete(s);
+      else state.styleModes.add(s);
+      btn.classList.toggle("active", state.styleModes.has(s));
+      applyStyle();
+    });
+  });
+
+  const opacitySlider = document.getElementById("surface-opacity");
+  const opacityVal = document.getElementById("surface-opacity-val");
+  opacitySlider.addEventListener("input", (e) => {
+    state.surfaceOpacity = parseFloat(e.target.value);
+    opacityVal.textContent = state.surfaceOpacity.toFixed(2);
+    if (state.styleModes.has("surface")) applyStyle();
+  });
+
+  document.getElementById("toggle-all-on").addEventListener("click", () => {
+    if (!state.msa) return;
+    state.active.fill(true);
+    refreshAfterToggleAll();
+  });
+  document.getElementById("toggle-all-off").addEventListener("click", () => {
+    if (!state.msa) return;
+    state.active.fill(false);
+    if (state.matchedIndex >= 0) state.active[state.matchedIndex] = true;
+    refreshAfterToggleAll();
+  });
+
+  // Divider drag
+  const divider = document.getElementById("divider");
+  const msa = document.getElementById("msa-panel");
+  let dragging = false;
+  divider.addEventListener("mousedown", () => { dragging = true; document.body.style.cursor = "col-resize"; });
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false; document.body.style.cursor = "";
+    if (state.viewer) state.viewer.resize();
+    scheduleRerender();
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const rect = document.getElementById("main").getBoundingClientRect();
+    const w = rect.right - e.clientX;
+    if (w > 240 && w < rect.width - 200) {
+      msa.style.width = w + "px";
+      if (state.viewer) state.viewer.resize();
+      scheduleRerender();
+    }
+  });
+  window.addEventListener("resize", scheduleRerender);
+
+  document.getElementById("pdb-id").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") document.getElementById("fetch-pdb").click();
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      document.getElementById("help-panel").style.display = "none";
+      clearHighlight();
+    }
+  });
+
+  const helpBtn = document.getElementById("help-btn");
+  const helpPanel = document.getElementById("help-panel");
+  helpBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    helpPanel.style.display = (helpPanel.style.display === "none" ? "block" : "none");
+  });
+  document.addEventListener("click", (e) => {
+    if (helpPanel.style.display === "none") return;
+    if (!helpPanel.contains(e.target) && e.target !== helpBtn) {
+      helpPanel.style.display = "none";
+    }
+  });
+
+  // MSA cell click -> highlight column + label residue on the structure
+  document.getElementById("msa-table").addEventListener("click", (e) => {
+    const target = e.target;
+    if (!target || target.tagName !== "SPAN") return;
+    const seqEl = target.parentElement;
+    if (!seqEl || !seqEl.classList.contains("seq")) return;
+    const block = seqEl.closest(".msa-block");
+    if (!block) return;
+    const offset = Array.prototype.indexOf.call(seqEl.children, target);
+    if (offset < 0) return;
+    const col = parseInt(block.dataset.blockStart, 10) + offset;
+    selectColumnFromMsa(col);
+  });
+}
+
+function selectColumnFromMsa(col) {
+  state.highlightCol = col;
+  applyMsaColumnHighlight(col, /*scroll=*/false);
+
+  if (!state.viewer || !state.pdbModel) return;
+  state.viewer.removeAllLabels();
+
+  if (state.colToResi && state.colToResi[col] != null) {
+    const resi = state.colToResi[col];
+    const cas = state.pdbModel.selectedAtoms({ chain: state.selectedChain, resi: resi, atom: "CA" });
+    const atom = cas[0] || state.pdbModel.selectedAtoms({ chain: state.selectedChain, resi: resi })[0];
+    if (atom) {
+      state.viewer.addLabel(`${atom.resn} ${resi} ← col ${col + 1}`, {
+        position: { x: atom.x, y: atom.y, z: atom.z },
+        backgroundColor: "rgba(0,0,0,0.85)",
+        fontColor: "#ffd54a",
+        fontSize: 12,
+        borderColor: "#ffd54a",
+        borderThickness: 1,
+        inFront: true,
+      });
+    }
+  }
+  state.viewer.render();
+}
+
+function refreshAfterToggleAll() {
+  computeConservation();
+  applyStyle();
+  document.querySelectorAll("#msa-table input[type=checkbox]").forEach(cb => {
+    const i = parseInt(cb.dataset.idx, 10);
+    if (cb.disabled) return;
+    cb.checked = state.active[i];
+  });
+  redrawAllConservationCanvases();
+  updateSummary();
+}
+
+let _rerenderTimer = null;
+function scheduleRerender() {
+  if (_rerenderTimer) return;
+  _rerenderTimer = setTimeout(() => {
+    _rerenderTimer = null;
+    if (state.msa) renderMsa();
+  }, 80);
+}
+
+/* =================================================================
+   Boot
+   ================================================================= */
+window.addEventListener("DOMContentLoaded", () => {
+  initViewer();
+  wireEvents();
+});
+</script>
+
+</body>
+</html>
