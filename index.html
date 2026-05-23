@@ -83,7 +83,6 @@
     padding: 8px 10px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px;
     flex-wrap: wrap; position: sticky; top: 0; background: var(--panel); z-index: 3;
   }
-  #msa-info { color: var(--muted); font-size: 12px; }
   #msa-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 4px 0 12px; }
   #msa-table { font-family: 'Consolas', 'Monaco', monospace; font-size: 12px; }
   .msa-block { margin: 0 0 14px 0; padding: 0 8px; }
@@ -99,7 +98,7 @@
   .msa-row .controls input[type=checkbox] { margin: 0; flex-shrink: 0; }
   .msa-row .name { overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
   .msa-row .badge { font-size: 9px; background: var(--match); color: #000; padding: 1px 4px; border-radius: 2px; font-weight: bold; flex-shrink: 0; }
-  .msa-row .seq { padding: 0 4px; letter-spacing: 0px; flex-shrink: 0; }
+  .msa-row .seq { padding: 0 4px; flex-shrink: 0; }
   .msa-row .seq span { display: inline-block; width: 9px; text-align: center; cursor: pointer; }
   .msa-row.ruler-row .seq span { cursor: default; }
   .msa-row .seq span.col-highlight {
@@ -141,7 +140,6 @@
     <label><button onclick="document.getElementById('msa-file').click()">Load MSA</button>
       <input type="file" id="msa-file" accept=".fasta,.fa,.fas,.aln,.clustal,.clu,.txt" />
     </label>
-    <span id="msa-info"></span>
   </div>
   <div class="group">
     <label>Conservation:
@@ -164,6 +162,9 @@
   <div class="group">
     <button id="toggle-all-on">All on</button>
     <button id="toggle-all-off">All off</button>
+  </div>
+  <div class="group">
+    <button id="export-pymol" title="Export PDB + mapped conservation as a PyMOL .pml script">Export PyMOL</button>
   </div>
   <div id="help-wrap">
     <button id="help-btn" title="Quick guide">? Help</button>
@@ -206,6 +207,14 @@
         <li>Click a residue cell in the MSA → labels the matching residue on the structure.</li>
         <li>Residues outside the alignment are labeled and the column highlight clears.</li>
         <li><kbd>Esc</kbd> clears all highlights and labels.</li>
+      </ul>
+
+      <h4>Export to PyMOL</h4>
+      <ul>
+        <li><b>Export PyMOL</b> downloads a self-contained <code>.pml</code> script.</li>
+        <li>Conservation (current metric, scaled 0–100) is written to the B-factor column for mapped residues; unmapped residues get B = −1.</li>
+        <li>Open in PyMOL with <code>File → Run Script…</code> or <code>pymol session.pml</code> — it loads the structure and applies the same cyan→white→maroon ramp.</li>
+        <li>To convert to a <code>.pse</code>: run <code>pymol -cq session.pml -d "save session.pse; quit"</code>, or open in PyMOL and use <code>File → Save Session As…</code>.</li>
       </ul>
     </div>
   </div>
@@ -283,7 +292,7 @@ const THREE_TO_ONE = {
   PRO:"P", SER:"S", THR:"T", TRP:"W", TYR:"Y", VAL:"V",
   MSE:"M", SEC:"U", PYL:"O",
 };
-const STANDARD_AA = "ACDEFGHIKLMNPQRSTVWY";
+
 
 /* =================================================================
    PDB loading
@@ -329,9 +338,8 @@ function extractChains() {
     const aa = THREE_TO_ONE[resn];
     if (!aa) continue;
     if (!seen[chain]) { seen[chain] = new Set(); state.chains[chain] = { seq: "", resis: [] }; }
-    const key = resi;
-    if (seen[chain].has(key)) continue;
-    seen[chain].add(key);
+    if (seen[chain].has(resi)) continue;
+    seen[chain].add(resi);
     state.chains[chain].seq += aa;
     state.chains[chain].resis.push(resi);
   }
@@ -656,35 +664,29 @@ function applyStyle() {
   state.viewer.render();
 }
 
+function addAtomLabel(text, atom, color) {
+  state.viewer.addLabel(text, {
+    position: { x: atom.x, y: atom.y, z: atom.z },
+    backgroundColor: "rgba(0,0,0,0.85)",
+    fontColor: color, fontSize: 12,
+    borderColor: color, borderThickness: 1, inFront: true,
+  });
+}
+
 function onAtomClick(atom, viewer) {
   viewer.removeAllLabels();
-  const resi = atom.resi;
-  const chain = atom.chain;
-  const resn = atom.resn;
-  let labelText, labelColor;
+  const { resi, chain, resn } = atom;
 
   if (chain === state.selectedChain && state.colMap && state.colMap[resi] != null) {
     const col = state.colMap[resi];
     state.highlightCol = col;
     applyMsaColumnHighlight(col, /*scroll=*/true);
-    labelText = `${resn} ${resi} → col ${col + 1}`;
-    labelColor = "#ffd54a";
+    addAtomLabel(`${resn} ${resi} → col ${col + 1}`, atom, "#ffd54a");
   } else {
     state.highlightCol = null;
     applyMsaColumnHighlight(null);
-    labelText = `${resn} ${resi}${chain ? " · chain " + chain : ""} — not in alignment`;
-    labelColor = "#ddd";
+    addAtomLabel(`${resn} ${resi}${chain ? " · chain " + chain : ""} — not in alignment`, atom, "#ddd");
   }
-
-  viewer.addLabel(labelText, {
-    position: { x: atom.x, y: atom.y, z: atom.z },
-    backgroundColor: "rgba(0,0,0,0.85)",
-    fontColor: labelColor,
-    fontSize: 12,
-    borderColor: labelColor,
-    borderThickness: 1,
-    inFront: true,
-  });
   viewer.render();
 }
 
@@ -941,6 +943,124 @@ function escapeHtml(s) {
 }
 
 /* =================================================================
+   PyMOL export — conservation → B-factor, emitted as a .pml script
+   ================================================================= */
+function makeBFactorMap() {
+  const m = {};
+  if (state.colMap && state.conservation && state.selectedChain) {
+    for (const resi in state.colMap) {
+      const col = state.colMap[resi];
+      const v = state.conservation[col];
+      if (v != null) m[state.selectedChain + "|" + resi] = v * 100;
+    }
+  }
+  return m;
+}
+
+function rpad(s, n) { s = String(s); return s.length >= n ? s.slice(0, n) : s + " ".repeat(n - s.length); }
+function lpad(s, n) { s = String(s); return s.length >= n ? s.slice(-n) : " ".repeat(n - s.length) + s; }
+
+function serializePdb(atoms, bByKey) {
+  const lines = [];
+  let serial = 1;
+  for (const atom of atoms) {
+    const rec = atom.hetflag ? "HETATM" : "ATOM  ";
+    const name = String(atom.atom || "").trim();
+    const elem = String(atom.elem || "").trim().toUpperCase();
+    const nameField = (elem.length <= 1 && name.length <= 3)
+      ? rpad(" " + name, 4) : rpad(name, 4);
+    const altLoc = (atom.altLoc || " ").toString().charAt(0) || " ";
+    const resn = rpad(String(atom.resn || ""), 3);
+    const chain = (atom.chain || " ").toString().charAt(0) || " ";
+    const resi = lpad(atom.resi, 4);
+    const iCode = (atom.icode || atom.iCode || " ").toString().charAt(0) || " ";
+    const x = lpad(atom.x.toFixed(3), 8);
+    const y = lpad(atom.y.toFixed(3), 8);
+    const z = lpad(atom.z.toFixed(3), 8);
+    const occ = lpad((atom.occupancy != null ? atom.occupancy : 1.0).toFixed(2), 6);
+    const key = atom.chain + "|" + atom.resi;
+    const bVal = bByKey[key] != null ? bByKey[key] : -1.0;
+    const b = lpad(bVal.toFixed(2), 6);
+    const el = lpad(elem, 2);
+    const ser = lpad((serial++ % 100000), 5);
+    lines.push(rec + ser + " " + nameField + altLoc + resn + " " + chain +
+      resi + iCode + "   " + x + y + z + occ + b + "          " + el + "  ");
+  }
+  lines.push("END");
+  return lines.join("\n");
+}
+
+function buildPmlSession(pdbText, matchedName, mode, chain) {
+  const modeLabel = mode === "entropy"
+    ? "Shannon entropy (0–100)"
+    : "% pairwise identity (0–100)";
+  return `# PyMOL session generated from PDB + MSA Conservation Viewer
+# Conservation metric: ${modeLabel}
+# Matched MSA sequence: ${matchedName || "(none)"}
+# Selected chain: ${chain || "(none)"}
+# B-factor >= 0: conservation score (0-100). B = -1: not in alignment.
+# To save as .pse: File > Save Session As, or:
+#   pymol -cq this_file.pml -d "save session.pse; quit"
+
+python
+from pymol import cmd
+
+pdb_str = """\\
+${pdbText}
+"""
+
+cmd.delete("all")
+cmd.read_pdbstr(pdb_str, "structure")
+
+# ConSurf-style ramp: cyan (variable) -> white -> maroon (conserved)
+cmd.set_color("consvar",  [0.063, 0.784, 0.902])
+cmd.set_color("conscons", [0.549, 0.078, 0.157])
+
+cmd.bg_color("white")
+cmd.hide("everything")
+cmd.show("cartoon", "structure")
+cmd.color("gray70", "structure")
+cmd.spectrum("b", "consvar_white_conscons", "structure and b > -0.5", minimum=0, maximum=100)
+
+cmd.show("sticks", "structure and hetatm and not resn HOH")
+cmd.color("gray60", "structure and hetatm")
+
+cmd.orient("structure")
+cmd.zoom("structure", buffer=2)
+python end
+`;
+}
+
+function downloadFile(filename, content) {
+  const blob = new Blob([content], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function exportPymolSession() {
+  if (!state.pdbAtoms || state.pdbAtoms.length === 0) {
+    setStatus("Load a PDB before exporting.", true); return;
+  }
+  if (!state.msa || !state.conservation) {
+    setStatus("Load an MSA before exporting — there is no conservation to map.", true); return;
+  }
+  const bMap = makeBFactorMap();
+  const pdbText = serializePdb(state.pdbAtoms, bMap);
+  const matchedName = state.matchedIndex >= 0 ? state.msa.names[state.matchedIndex] : "";
+  const pml = buildPmlSession(pdbText, matchedName, state.conservationMode, state.selectedChain);
+  const safeName = (matchedName || "structure").replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 40);
+  const modeTag = state.conservationMode === "entropy" ? "entropy" : "pid";
+  downloadFile(safeName + "_" + modeTag + ".pml", pml);
+  setStatus("Exported PyMOL session (.pml) with conservation in B-factor column.");
+}
+
+/* =================================================================
    Orchestration: re-match and re-render after PDB or MSA changes
    ================================================================= */
 function rematchAndRender() {
@@ -1066,6 +1186,8 @@ function wireEvents() {
   });
   window.addEventListener("resize", scheduleRerender);
 
+  document.getElementById("export-pymol").addEventListener("click", exportPymolSession);
+
   document.getElementById("pdb-id").addEventListener("keydown", (e) => {
     if (e.key === "Enter") document.getElementById("fetch-pdb").click();
   });
@@ -1114,19 +1236,10 @@ function selectColumnFromMsa(col) {
 
   if (state.colToResi && state.colToResi[col] != null) {
     const resi = state.colToResi[col];
-    const cas = state.pdbModel.selectedAtoms({ chain: state.selectedChain, resi: resi, atom: "CA" });
-    const atom = cas[0] || state.pdbModel.selectedAtoms({ chain: state.selectedChain, resi: resi })[0];
-    if (atom) {
-      state.viewer.addLabel(`${atom.resn} ${resi} ← col ${col + 1}`, {
-        position: { x: atom.x, y: atom.y, z: atom.z },
-        backgroundColor: "rgba(0,0,0,0.85)",
-        fontColor: "#ffd54a",
-        fontSize: 12,
-        borderColor: "#ffd54a",
-        borderThickness: 1,
-        inFront: true,
-      });
-    }
+    const sel = { chain: state.selectedChain, resi: resi };
+    const atom = state.pdbModel.selectedAtoms({ ...sel, atom: "CA" })[0]
+              || state.pdbModel.selectedAtoms(sel)[0];
+    if (atom) addAtomLabel(`${atom.resn} ${resi} ← col ${col + 1}`, atom, "#ffd54a");
   }
   state.viewer.render();
 }
