@@ -54,9 +54,9 @@ Double-click `index.html` or open it with `File → Open` in your browser. Every
 
 | File | Description |
 |------|-------------|
-| `HSV6A_protease.pdb` | HHV-6A protease structure (2 chains, 230 aa each) |
-| `UL80.aln` | Clustal alignment of 4 herpesvirus protease sequences |
-| `SCAF.fa` | FASTA alignment of 15 full-length scaffold/protease ORFs |
+| `H.pdb` | e structure (2 chains, 1aa each) |
+| `.aln` | Clustal alignment  |
+| `.fa` | FASTA alignment of 15  |
 
 ## Requirements
 
