@@ -1023,7 +1023,7 @@ cmd.color("gray70", "structure")
 cmd.spectrum("b", "consvar_white_conscons", "structure and b > -0.5", minimum=0, maximum=100)
 
 # Matched chain: sidechain sticks (hide backbone atoms from stick rep)
-cmd.show("sticks", "structure and chain ${chain} and not name C+N+O+CA")
+cmd.show("sticks", "structure and chain ${chain} and not name C+N+O")
 
 # Surface copy of matched chain — separate object so it can be toggled independently
 cmd.create("surface_${chain}", "structure and chain ${chain}")
