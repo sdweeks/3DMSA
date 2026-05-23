@@ -1022,6 +1022,18 @@ cmd.show("cartoon", "structure")
 cmd.color("gray70", "structure")
 cmd.spectrum("b", "consvar_white_conscons", "structure and b > -0.5", minimum=0, maximum=100)
 
+# Matched chain: sidechain sticks (hide backbone atoms from stick rep)
+cmd.show("sticks", "structure and chain ${chain} and not name C+N+O+CA")
+
+# Surface copy of matched chain — separate object so it can be toggled independently
+cmd.create("surface_${chain}", "structure and chain ${chain}")
+cmd.hide("everything", "surface_${chain}")
+cmd.show("surface", "surface_${chain}")
+cmd.color("gray70", "surface_${chain}")
+cmd.spectrum("b", "consvar_white_conscons", "surface_${chain} and b > -0.5", minimum=0, maximum=100)
+cmd.set("transparency", 0.6, "surface_${chain}")
+
+# Ligands as sticks (skip waters)
 cmd.show("sticks", "structure and hetatm and not resn HOH")
 cmd.color("gray60", "structure and hetatm")
 
