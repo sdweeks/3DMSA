@@ -64,6 +64,9 @@ Double-click `index.html` or open it with `File → Open` in your browser. Every
 - No server-side dependencies — the only external resource is the 3Dmol.js library loaded from CDN
 - Python 3 (optional, only needed for Option 1)
 
+#Online
+It can also be run from https://sdweeks.github.io/3DMSA/
+
 ## License
 
 MIT
