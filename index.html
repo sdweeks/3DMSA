@@ -651,7 +651,10 @@ function applyStyle() {
   }
 
   if (state.styleModes.has("surface")) {
-    const surfSel = state.selectedChain ? { chain: state.selectedChain } : {};
+    // Exclude HETATMs (waters, ligands) so the surface covers only the protein
+    const surfSel = state.selectedChain
+      ? { chain: state.selectedChain, hetflag: false }
+      : { hetflag: false };
     state.viewer.addSurface($3Dmol.SurfaceType.VDW,
       { opacity: state.surfaceOpacity },
       surfSel
